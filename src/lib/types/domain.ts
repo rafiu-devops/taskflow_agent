@@ -75,6 +75,20 @@ export interface ActivityLog {
   status: string | null;
 }
 
+import type { PermissionKey } from "@/lib/auth/permissions";
+
+export interface PermissionRecord {
+  recordId: string;
+  employeeId: string;
+  employeeEmail: string | null;
+  permissionKey: PermissionKey;
+  granted: boolean;
+  grantedByAdminEmail: string | null;
+  updatedByAdminEmail: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface DashboardSummary {
   totalEmployees: number;
   totalDepartments: number;

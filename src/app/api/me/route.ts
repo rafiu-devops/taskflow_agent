@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { getCurrentUser } from "@/lib/auth/authorization";
+import { handleApiError } from "@/lib/api/handleError";
 
 export async function GET() {
-  const session = await getSession();
-  if (!session.email) {
-    return NextResponse.json({ user: null }, { status: 401 });
+  try {
+    const user = await getCurrentUser();
+    return NextResponse.json({
+      user: {
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        employeeId: user.employeeId ?? null,
+        departmentId: user.employee?.departmentId ?? null,
+        permissions: user.permissions,
+      },
+    });
+  } catch (err) {
+    return handleApiError(err, "Unable to load account");
   }
-  return NextResponse.json({
-    user: {
-      email: session.email,
-      name: session.name,
-      role: session.role,
-      employeeId: session.employeeId,
-    },
-  });
 }

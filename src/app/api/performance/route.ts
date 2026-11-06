@@ -1,20 +1,26 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth/getAccessToken";
+import {
+  filterPerformanceForUser,
+  getPerformanceDataScope,
+  requireAnyPermission,
+} from "@/lib/auth/authorization";
 import { getPerformance } from "@/lib/excel/excelService";
-import { UnauthorizedError } from "@/lib/errors";
+import { handleApiError } from "@/lib/api/handleError";
 
 export async function GET() {
   try {
-    const session = await requireSession();
+    const user = await requireAnyPermission([
+      "PERFORMANCE_VIEW_MY",
+      "PERFORMANCE_VIEW_DEPARTMENT",
+      "PERFORMANCE_VIEW_ALL",
+    ]);
     const all = await getPerformance();
-    const performance =
-      session.role === "admin"
-        ? all
-        : all.filter((p) => p.employeeId === session.employeeId);
-    return NextResponse.json({ performance });
+    const performance = user.role === "admin" ? all : filterPerformanceForUser(user, all);
+    return NextResponse.json({
+      performance,
+      scope: getPerformanceDataScope(user),
+    });
   } catch (err) {
-    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    console.error(err);
-    return NextResponse.json({ error: "Failed to load performance" }, { status: 500 });
+    return handleApiError(err, "Failed to load performance");
   }
 }

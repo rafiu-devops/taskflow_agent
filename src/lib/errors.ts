@@ -19,6 +19,20 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  constructor(message = "You do not have permission to perform this action") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
+export class AuthorizationUnavailableError extends Error {
+  constructor(message = "Unable to verify permissions. Please try again later.") {
+    super(message);
+    this.name = "AuthorizationUnavailableError";
+  }
+}
+
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);

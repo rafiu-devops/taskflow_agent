@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isPermissionKey } from "@/lib/auth/permissions";
 
 const idPattern = /^[A-Z]+-\d{3,}$/;
 
@@ -27,4 +28,16 @@ export const updateTaskSchema = createTaskSchema.partial().extend({
 export const loginSchema = z.object({
   code: z.string().min(1),
   state: z.string().optional(),
+});
+
+export const updateEmployeePermissionsSchema = z.object({
+  permissions: z
+    .record(z.boolean())
+    .superRefine((value, ctx) => {
+      for (const key of Object.keys(value)) {
+        if (!isPermissionKey(key)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Unknown permission key: ${key}` });
+        }
+      }
+    }),
 });

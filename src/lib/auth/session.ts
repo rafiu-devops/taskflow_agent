@@ -69,11 +69,9 @@ export async function getSession() {
         maxAge: 60 * 60 * 24 * 7,
       });
     },
-    destroy() {
-      (async () => {
-        const cs = await cookies();
-        cs.delete(COOKIE_NAME);
-      })();
+    async destroy() {
+      const cs = await cookies();
+      cs.delete(COOKIE_NAME);
     },
   };
 

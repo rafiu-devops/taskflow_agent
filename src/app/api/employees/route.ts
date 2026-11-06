@@ -1,20 +1,30 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth/getAccessToken";
+import { requirePermission, hasPermission } from "@/lib/auth/authorization";
 import { getEmployees } from "@/lib/excel/excelService";
-import { UnauthorizedError } from "@/lib/errors";
+import { handleApiError } from "@/lib/api/handleError";
 
 export async function GET() {
   try {
-    const session = await requireSession();
+    const user = await requirePermission("EMPLOYEES_VIEW_DIRECTORY");
     const all = await getEmployees();
-    const employees =
-      session.role === "admin"
-        ? all
-        : all.filter((e) => e.employeeId === session.employeeId);
+    const canViewDetails = hasPermission(user, "EMPLOYEES_VIEW_DETAILS");
+    const canViewContact = hasPermission(user, "EMPLOYEES_VIEW_CONTACT");
+
+    if (user.role === "admin") {
+      return NextResponse.json({ employees: all });
+    }
+
+    const employees = all.map((employee) => ({
+      employeeId: employee.employeeId,
+      fullName: employee.fullName,
+      email: canViewContact ? employee.email : null,
+      departmentId: canViewDetails ? employee.departmentId : null,
+      designation: canViewDetails ? employee.designation : null,
+      accountStatus: employee.accountStatus,
+      joiningDate: canViewDetails ? employee.joiningDate : null,
+    }));
     return NextResponse.json({ employees });
   } catch (err) {
-    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    console.error(err);
-    return NextResponse.json({ error: "Failed to load employees" }, { status: 500 });
+    return handleApiError(err, "Failed to load employees");
   }
 }

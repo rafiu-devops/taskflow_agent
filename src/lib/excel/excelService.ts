@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { downloadWorkbook, uploadWorkbook } from "@/lib/google/driveClient";
 import { withWorkbookLock } from "@/lib/excel/mutex";
-import { ConflictError, NotFoundError } from "@/lib/errors";
+import { NotFoundError } from "@/lib/errors";
 import type {
   Employee,
   Department,
@@ -11,6 +11,7 @@ import type {
   PerformanceRow,
   ActivityLog,
   DashboardSummary,
+  PermissionRecord,
 } from "@/lib/types/domain";
 import { createTaskSchema, updateTaskSchema } from "@/lib/validation/schemas";
 
@@ -80,7 +81,32 @@ function toNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+import {
+  PERMISSION_KEYS,
+  type PermissionGrantState,
+  type PermissionKey,
+  emptyEmployeePermissions,
+} from "@/lib/auth/permissions";
+
 // ---------- Readers ----------
+
+function parseEmployeesWorksheet(ws: ExcelJS.Worksheet): Employee[] {
+  const { headers, rows } = readTable(ws);
+  return rows
+    .map((row) => rowToObject(headers, row))
+    .filter((o) => o.Employee_ID)
+    .map((o) => ({
+      employeeId: String(o.Employee_ID).trim(),
+      fullName: o.Full_Name ? String(o.Full_Name).trim() : "",
+      email: toStr(o.Email)?.trim() ?? null,
+      departmentId: toStr(o.Department_ID)?.trim() ?? null,
+      designation: toStr(o.Designation)?.trim() ?? null,
+      accountStatus: (toStr(o.Account_Status)?.trim() as "Active" | "Inactive" | null) ?? null,
+      joiningDate: toStr(o.Joining_Date)?.trim() ?? null,
+      createdAt: toStr(o.Created_At),
+      updatedAt: toStr(o.Updated_At),
+    }));
+}
 
 export async function getEmployees(): Promise<Employee[]> {
   const { buffer } = await downloadWorkbook();
@@ -88,21 +114,7 @@ export async function getEmployees(): Promise<Employee[]> {
   await wb.xlsx.load(buffer as any);
   const ws = wb.getWorksheet("Employees");
   if (!ws) return [];
-  const { headers, rows } = readTable(ws);
-  return rows
-    .map((row) => rowToObject(headers, row))
-    .filter((o) => o.Employee_ID)
-    .map((o) => ({
-      employeeId: String(o.Employee_ID),
-      fullName: o.Full_Name ? String(o.Full_Name) : "",
-      email: toStr(o.Email),
-      departmentId: toStr(o.Department_ID),
-      designation: toStr(o.Designation),
-      accountStatus: (toStr(o.Account_Status) as "Active" | "Inactive" | null) ?? null,
-      joiningDate: toStr(o.Joining_Date),
-      createdAt: toStr(o.Created_At),
-      updatedAt: toStr(o.Updated_At),
-    }));
+  return parseEmployeesWorksheet(ws);
 }
 
 export async function getDepartments(): Promise<Department[]> {
@@ -209,6 +221,467 @@ export async function getActivityLogs(): Promise<ActivityLog[]> {
     }));
 }
 
+// ---------- Permission management ----------
+
+const PERMISSION_SHEET = "Permission_Management";
+const PERMISSION_TABLE = "tblPermissionManagement";
+const PERMISSION_HEADERS = [
+  "Permission_Record_ID",
+  "Employee_ID",
+  "Employee_Email",
+  "Permission_Key",
+  "Permission_Granted",
+  "Granted_By_Admin_Email",
+  "Updated_By_Admin_Email",
+  "Created_At",
+  "Updated_At",
+] as const;
+
+type PermissionHeader = (typeof PERMISSION_HEADERS)[number];
+
+function parsePermissionBoolean(value: unknown): boolean {
+  if (value === true) return true;
+  if (value === false || value === null || value === undefined) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "y";
+}
+
+function normalizeEmailForWorkbook(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function permissionRecordFromObject(raw: Record<string, unknown>): PermissionRecord | null {
+  const key = String(raw.Permission_Key ?? "").trim();
+  if (!(PERMISSION_KEYS as string[]).includes(key)) return null;
+  const employeeId = String(raw.Employee_ID ?? "").trim();
+  if (!employeeId) return null;
+  return {
+    recordId: String(raw.Permission_Record_ID ?? "").trim(),
+    employeeId,
+    employeeEmail: raw.Employee_Email ? normalizeEmailForWorkbook(raw.Employee_Email) : null,
+    permissionKey: key as PermissionKey,
+    granted: parsePermissionBoolean(raw.Permission_Granted),
+    grantedByAdminEmail: raw.Granted_By_Admin_Email ? normalizeEmailForWorkbook(raw.Granted_By_Admin_Email) : null,
+    updatedByAdminEmail: raw.Updated_By_Admin_Email ? normalizeEmailForWorkbook(raw.Updated_By_Admin_Email) : null,
+    createdAt: toStr(raw.Created_At),
+    updatedAt: toStr(raw.Updated_At),
+  };
+}
+
+function readPermissionRecordsFromWorkbook(wb: ExcelJS.Workbook): PermissionRecord[] {
+  const ws = wb.getWorksheet(PERMISSION_SHEET);
+  if (!ws) return [];
+  const { headers, rows } = readTable(ws);
+  const records: PermissionRecord[] = [];
+  for (const row of rows) {
+    const raw = rowToObject(headers, row);
+    const record = permissionRecordFromObject(raw);
+    if (record) records.push(record);
+  }
+  return records;
+}
+
+export async function getPermissionRecords(employeeId?: string): Promise<PermissionRecord[]> {
+  const { buffer } = await downloadWorkbook();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as any);
+  const records = readPermissionRecordsFromWorkbook(wb);
+  return employeeId ? records.filter((record) => record.employeeId === employeeId) : records;
+}
+
+export async function getEmployeePermissionGrantState(employeeId: string): Promise<PermissionGrantState> {
+  const grants = emptyEmployeePermissions();
+  const records = await getPermissionRecords(employeeId);
+  const latestByKey = new Map<PermissionKey, PermissionRecord>();
+  for (const record of records) {
+    const current = latestByKey.get(record.permissionKey);
+    if (!current || String(record.updatedAt ?? "") >= String(current.updatedAt ?? "")) {
+      latestByKey.set(record.permissionKey, record);
+    }
+  }
+  for (const [key, record] of latestByKey) {
+    grants[key] = record.granted;
+  }
+  return grants;
+}
+
+export type EmployeePermissionOverview = Employee & {
+  grantedPermissions: number;
+  totalPermissions: number;
+  permissionStatus: "Not configured" | "Partial access" | "Full employee access";
+  lastPermissionUpdate: string | null;
+};
+
+function buildPermissionOverview(
+  employees: Employee[],
+  records: PermissionRecord[],
+  search?: string,
+): EmployeePermissionOverview[] {
+  const byEmployee = new Map<string, PermissionRecord[]>();
+  for (const record of records) {
+    const list = byEmployee.get(record.employeeId) ?? [];
+    list.push(record);
+    byEmployee.set(record.employeeId, list);
+  }
+  const query = (search ?? "").trim().toLowerCase();
+  return employees
+    .filter((employee) => {
+      if (!query) return true;
+      return [employee.fullName, employee.email ?? "", employee.employeeId, employee.departmentId ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    })
+    .map((employee) => {
+      const employeeRecords = byEmployee.get(employee.employeeId) ?? [];
+      const latestByKey = new Map<PermissionKey, PermissionRecord>();
+      for (const record of employeeRecords) {
+        const current = latestByKey.get(record.permissionKey);
+        if (!current || String(record.updatedAt ?? "") >= String(current.updatedAt ?? "")) {
+          latestByKey.set(record.permissionKey, record);
+        }
+      }
+      const effective = Array.from(latestByKey.values());
+      const grantedPermissions = effective.filter((record) => record.granted).length;
+      const totalPermissions = PERMISSION_KEYS.length;
+      const lastPermissionUpdate = effective.reduce<string | null>((latest, record) => {
+        if (!record.updatedAt) return latest;
+        return !latest || record.updatedAt > latest ? record.updatedAt : latest;
+      }, null);
+      const permissionStatus: EmployeePermissionOverview["permissionStatus"] =
+        effective.length === 0
+          ? "Not configured"
+          : grantedPermissions === 0
+            ? "Not configured"
+            : grantedPermissions === totalPermissions
+              ? "Full employee access"
+              : "Partial access";
+      return {
+        ...employee,
+        grantedPermissions,
+        totalPermissions,
+        permissionStatus,
+        lastPermissionUpdate,
+      };
+    })
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+}
+
+export async function getPermissionEmployeeOverview(search?: string): Promise<EmployeePermissionOverview[]> {
+  const { buffer } = await downloadWorkbook();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as any);
+  const employeesWs = wb.getWorksheet("Employees");
+  const employees = employeesWs ? parseEmployeesWorksheet(employeesWs) : [];
+  const records = readPermissionRecordsFromWorkbook(wb);
+  return buildPermissionOverview(employees, records, search);
+}
+
+export type EmployeePermissionDetails = {
+  employee: Employee;
+  permissions: PermissionGrantState;
+  lastUpdatedAt: string | null;
+  updatedBy: string | null;
+  grantedCount: number;
+  totalPermissions: number;
+  missingSheet: boolean;
+};
+
+export async function getEmployeePermissionDetails(employeeId: string): Promise<EmployeePermissionDetails | null> {
+  const { buffer } = await downloadWorkbook();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as any);
+  const employeesWs = wb.getWorksheet("Employees");
+  const employee = employeesWs
+    ? parseEmployeesWorksheet(employeesWs).find((row) => row.employeeId === employeeId)
+    : undefined;
+  if (!employee) return null;
+
+  const permissionWs = wb.getWorksheet(PERMISSION_SHEET);
+  const records = readPermissionRecordsFromWorkbook(wb).filter((record) => record.employeeId === employeeId);
+  const grants = emptyEmployeePermissions();
+  const latestByKey = new Map<PermissionKey, PermissionRecord>();
+  for (const record of records) {
+    const current = latestByKey.get(record.permissionKey);
+    if (!current || String(record.updatedAt ?? "") >= String(current.updatedAt ?? "")) {
+      latestByKey.set(record.permissionKey, record);
+    }
+  }
+  for (const [key, record] of latestByKey) grants[key] = record.granted;
+
+  let lastUpdatedAt: string | null = null;
+  let updatedBy: string | null = null;
+  for (const record of latestByKey.values()) {
+    if (record.updatedAt && (!lastUpdatedAt || record.updatedAt > lastUpdatedAt)) {
+      lastUpdatedAt = record.updatedAt;
+      updatedBy = record.updatedByAdminEmail ?? record.grantedByAdminEmail;
+    }
+  }
+  const grantedCount = Object.values(grants).filter(Boolean).length;
+  return {
+    employee,
+    permissions: grants,
+    lastUpdatedAt,
+    updatedBy,
+    grantedCount,
+    totalPermissions: PERMISSION_KEYS.length,
+    missingSheet: !permissionWs,
+  };
+}
+
+function worksheetHeaders(ws: ExcelJS.Worksheet): string[] {
+  const headerRow = ws.getRow(1);
+  const headers: string[] = [];
+  for (let c = 1; c <= headerRow.cellCount; c++) {
+    const value = headerRow.getCell(c).value;
+    headers.push(value === null || value === undefined ? "" : String(value));
+  }
+  while (headers.length && headers[headers.length - 1] === "") headers.pop();
+  return headers;
+}
+
+function readWorksheetRows(ws: ExcelJS.Worksheet, headers: string[]): unknown[][] {
+  const rows: unknown[][] = [];
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const values: unknown[] = [];
+    let any = false;
+    for (let c = 1; c <= headers.length; c++) {
+      const value = cellValue(row.getCell(c));
+      values.push(value);
+      if (value !== null && value !== undefined && value !== "") any = true;
+    }
+    if (any) rows.push(values);
+  }
+  return rows;
+}
+
+function ensurePermissionWorksheet(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
+  let ws = wb.getWorksheet(PERMISSION_SHEET);
+  if (!ws) {
+    ws = wb.addWorksheet(PERMISSION_SHEET);
+    ws.addRow([...PERMISSION_HEADERS]);
+  }
+
+  const headers = worksheetHeaders(ws);
+  const missing = PERMISSION_HEADERS.filter((header) => !headers.includes(header));
+  if (missing.length) {
+    throw new Error(`Permission_Management sheet is missing required columns: ${missing.join(", ")}`);
+  }
+
+  const table = (ws as any).tables?.[PERMISSION_TABLE];
+  if (!table) {
+    (ws as any).addTable({
+      name: PERMISSION_TABLE,
+      ref: "A1",
+      headerRow: true,
+      totalsRow: false,
+      style: { theme: "TableStyleMedium2", showFirstColumn: false, showLastColumn: false, showRowStripes: true, showColumnStripes: false },
+      columns: PERMISSION_HEADERS.map((name) => ({ name })),
+      rows: readWorksheetRows(ws, worksheetHeaders(ws)),
+    }).commit();
+  }
+  return ws;
+}
+
+function permissionRowsFromRecords(records: PermissionRecord[]): unknown[][] {
+  return records.map((record) => [
+    record.recordId,
+    record.employeeId,
+    record.employeeEmail,
+    record.permissionKey,
+    record.granted ? "TRUE" : "FALSE",
+    record.grantedByAdminEmail,
+    record.updatedByAdminEmail,
+    record.createdAt,
+    record.updatedAt,
+  ]);
+}
+
+export type PermissionSaveResult = {
+  employeeId: string;
+  employee: Employee;
+  permissions: PermissionGrantState;
+  changed: PermissionRecord[];
+  lastUpdatedAt: string;
+  updatedBy: string;
+  createdSheet: boolean;
+};
+
+export async function saveEmployeePermissionGrants(
+  employeeId: string,
+  grants: PermissionGrantState,
+  actorAdminEmail: string,
+): Promise<PermissionSaveResult> {
+  const actor = normalizeEmailForWorkbook(actorAdminEmail);
+  const now = nowIso();
+  return withWorkbookLock(async () => {
+    const { buffer, version } = await downloadWorkbook();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as any);
+
+    const employeesWs = wb.getWorksheet("Employees");
+    const employee = employeesWs
+      ? parseEmployeesWorksheet(employeesWs).find((row) => row.employeeId === employeeId)
+      : undefined;
+    if (!employee) throw new NotFoundError("Employee not found");
+
+    const createdSheet = !wb.getWorksheet(PERMISSION_SHEET);
+    const permissionWs = ensurePermissionWorksheet(wb);
+    const existingRecords = readPermissionRecordsFromWorkbook(wb);
+    const previousForEmployee = existingRecords.filter((record) => record.employeeId === employeeId);
+    const latestPrevious = new Map<PermissionKey, PermissionRecord>();
+    for (const record of previousForEmployee) {
+      const current = latestPrevious.get(record.permissionKey);
+      if (!current || String(record.updatedAt ?? "") >= String(current.updatedAt ?? "")) {
+        latestPrevious.set(record.permissionKey, record);
+      }
+    }
+
+    const keptRecords = existingRecords.filter((record) => record.employeeId !== employeeId);
+    const usedIds = new Set(existingRecords.map((record) => record.recordId).filter(Boolean));
+    let nextPermissionNumber = 1;
+    for (const id of usedIds) {
+      const match = id.match(/^PERM-(\d+)$/);
+      if (match) nextPermissionNumber = Math.max(nextPermissionNumber, Number(match[1]) + 1);
+    }
+    const allocateId = () => {
+      let candidate = `PERM-${String(nextPermissionNumber).padStart(3, "0")}`;
+      while (usedIds.has(candidate)) {
+        nextPermissionNumber += 1;
+        candidate = `PERM-${String(nextPermissionNumber).padStart(3, "0")}`;
+      }
+      usedIds.add(candidate);
+      nextPermissionNumber += 1;
+      return candidate;
+    };
+
+    const nextRecords: PermissionRecord[] = [];
+    const changed: PermissionRecord[] = [];
+    for (const key of PERMISSION_KEYS) {
+      const previous = latestPrevious.get(key);
+      const desired = grants[key];
+      const previousGranted = previous?.granted ?? false;
+      const changedState = previous ? previousGranted !== desired : desired;
+      const record: PermissionRecord = {
+        recordId: previous?.recordId || allocateId(),
+        employeeId,
+        employeeEmail: employee.email ? normalizeEmailForWorkbook(employee.email) : null,
+        permissionKey: key,
+        granted: desired,
+        grantedByAdminEmail: desired
+          ? previousGranted
+            ? previous?.grantedByAdminEmail ?? actor
+            : actor
+          : previous?.grantedByAdminEmail ?? actor,
+        updatedByAdminEmail: actor,
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now,
+      };
+      nextRecords.push(record);
+      if (changedState) changed.push(record);
+    }
+
+    if (changed.length === 0) {
+      return {
+        employeeId,
+        employee,
+        permissions: grants,
+        changed,
+        lastUpdatedAt: now,
+        updatedBy: actor,
+        createdSheet: false,
+      };
+    }
+
+    rebuildTable(
+      permissionWs,
+      PERMISSION_TABLE,
+      [...PERMISSION_HEADERS],
+      permissionRowsFromRecords([...keptRecords, ...nextRecords]),
+    );
+
+    if (changed.length) {
+      appendActivityLogs(wb, changed.map((record) => ({
+        actorEmail: actor,
+        actionType: record.granted ? "PERMISSION_GRANTED" : "PERMISSION_REVOKED",
+        targetEntity: "Employee_Permission",
+        targetId: `${employeeId}:${record.permissionKey}`,
+        description: `${actor} ${record.granted ? "granted" : "revoked"} ${record.permissionKey} for ${employeeId}`,
+        previousValue: String(latestPrevious.get(record.permissionKey)?.granted ?? false).toUpperCase(),
+        newValue: String(record.granted).toUpperCase(),
+      })));
+    }
+
+    const outBuffer = await wb.xlsx.writeBuffer();
+    await uploadWorkbook(Buffer.from(outBuffer), version);
+
+    const updatedGrants = emptyEmployeePermissions();
+    for (const record of nextRecords) updatedGrants[record.permissionKey] = record.granted;
+    return {
+      employeeId,
+      employee,
+      permissions: updatedGrants,
+      changed,
+      lastUpdatedAt: now,
+      updatedBy: actor,
+      createdSheet,
+    };
+  });
+}
+
+type ActivityLogEntry = {
+  actorEmail: string;
+  actorRole?: string;
+  actionType: string;
+  targetEntity: string;
+  targetId: string;
+  description: string;
+  previousValue: string | null;
+  newValue: string | null;
+};
+
+function appendActivityLogs(wb: ExcelJS.Workbook, entries: ActivityLogEntry[]): void {
+  const logWs = wb.getWorksheet("Activity_Logs");
+  if (!logWs || entries.length === 0) return;
+  const headers = worksheetHeaders(logWs);
+  const existingRows = readWorksheetRows(logWs, headers);
+  const existingIds = existingRows
+    .map((row) => row[headers.indexOf("Log_ID")])
+    .filter(Boolean)
+    .map(String);
+  let nextLogNumber = 1;
+  for (const id of existingIds) {
+    const match = id.match(/^LOG-(\d+)$/);
+    if (match) nextLogNumber = Math.max(nextLogNumber, Number(match[1]) + 1);
+  }
+  const now = nowIso();
+  const rows = [...existingRows];
+  for (const entry of entries) {
+    const logId = `LOG-${String(nextLogNumber).padStart(3, "0")}`;
+    nextLogNumber += 1;
+    const row = new Array(headers.length).fill(null);
+    const set = (name: PermissionHeader | string, value: unknown) => {
+      const idx = headers.indexOf(name);
+      if (idx >= 0) row[idx] = value;
+    };
+    set("Log_ID", logId);
+    set("User_ID", entry.actorEmail);
+    set("User_Name", entry.actorEmail);
+    set("User_Role", entry.actorRole ?? "Admin");
+    set("Action_Type", entry.actionType);
+    set("Target_Entity", entry.targetEntity);
+    set("Target_ID", entry.targetId);
+    set("Action_Description", entry.description);
+    set("Previous_Value", entry.previousValue);
+    set("New_Value", entry.newValue);
+    set("Timestamp", now);
+    set("Status", "Success");
+    rows.push(row);
+  }
+  rebuildTable(logWs, "tblActivityLogs", headers, rows);
+}
+
 // ---------- Writers ----------
 
 function nowIso(): string {
@@ -250,10 +723,24 @@ function rebuildTable(ws: ExcelJS.Worksheet, tableName: string, headers: string[
   table.commit();
 }
 
+export interface TaskActor {
+  email: string;
+  role?: "admin" | "employee";
+}
+
+function normalizeTaskActor(actor: string | TaskActor | null | undefined): TaskActor {
+  if (!actor) return { email: "system", role: "admin" };
+  if (typeof actor === "string") return { email: actor, role: "admin" };
+  return { email: actor.email, role: actor.role ?? "employee" };
+}
+
 export async function createTask(
   input: unknown,
-  actorId: string | null = null
+  actorInput: string | TaskActor | null = null
 ): Promise<Task> {
+  const actor = normalizeTaskActor(actorInput);
+  const actorId = actor.email;
+  const actorRole = actor.role === "admin" ? "Admin" : "Employee";
   const parsed = createTaskSchema.parse(input);
   return withWorkbookLock(async () => {
     const { buffer, version } = await downloadWorkbook();
@@ -358,7 +845,7 @@ export async function createTask(
         lset("Log_ID", logId);
         lset("User_ID", actorId);
         lset("User_Name", actorId);
-        lset("User_Role", "Admin");
+        lset("User_Role", actorRole);
         lset("Action_Type", "CREATE");
         lset("Target_Entity", "Task");
         lset("Target_ID", taskId);
@@ -399,8 +886,9 @@ export async function createTask(
 
 export async function updateTask(
   input: unknown,
-  actorId: string | null = null
+  actorInput: string | TaskActor | null = null
 ): Promise<Task> {
+  void actorInput; // Reserved for task-update audit logging.
   const parsed = updateTaskSchema.parse(input);
   const taskId = parsed.taskId;
   return withWorkbookLock(async () => {
@@ -437,9 +925,6 @@ export async function updateTask(
       const idx = colIndex(name);
       if (idx > 0) targetRow!.getCell(idx).value = value as ExcelJS.CellValue;
     };
-
-    // read previous for log
-    const prevTitle = cellValue(targetRow.getCell(colIndex("Task_Title")));
 
     if (parsed.title !== undefined) setCell("Task_Title", parsed.title);
     if (parsed.description !== undefined) setCell("Task_Description", parsed.description);

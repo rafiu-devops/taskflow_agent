@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
-import { requireSession } from "@/lib/auth/getAccessToken";
+import { hasPermission, requireAnyPermission } from "@/lib/auth/authorization";
 import { getActivityLogs } from "@/lib/excel/excelService";
-import { UnauthorizedError } from "@/lib/errors";
+import { handleApiError } from "@/lib/api/handleError";
 
 export async function GET() {
   try {
-    const session = await requireSession();
-    if (session.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    const user = await requireAnyPermission(["ACTIVITY_LOGS_VIEW", "ACTIVITY_LOGS_VIEW_MY"]);
     const logs = await getActivityLogs();
-    return NextResponse.json({ logs });
+    if (user.role === "admin" || hasPermission(user, "ACTIVITY_LOGS_VIEW")) {
+      return NextResponse.json({ logs, scope: "organization" });
+    }
+    const email = user.email.toLowerCase();
+    const ownLogs = logs.filter((log) => String(log.userId ?? "").trim().toLowerCase() === email);
+    return NextResponse.json({ logs: ownLogs, scope: "own" });
   } catch (err) {
-    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    console.error(err);
-    return NextResponse.json({ error: "Failed to load activity logs" }, { status: 500 });
+    return handleApiError(err, "Failed to load activity logs");
   }
 }
