@@ -90,7 +90,7 @@ import {
 
 // ---------- Readers ----------
 
-function parseEmployeesWorksheet(ws: ExcelJS.Worksheet): Employee[] {
+export function parseEmployeesWorksheet(ws: ExcelJS.Worksheet): Employee[] {
   const { headers, rows } = readTable(ws);
   return rows
     .map((row) => rowToObject(headers, row))
@@ -111,52 +111,42 @@ function parseEmployeesWorksheet(ws: ExcelJS.Worksheet): Employee[] {
 export async function getEmployees(): Promise<Employee[]> {
   const { buffer } = await downloadWorkbook();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const ws = wb.getWorksheet("Employees");
   if (!ws) return [];
   return parseEmployeesWorksheet(ws);
 }
 
-export async function getDepartments(): Promise<Department[]> {
-  const { buffer } = await downloadWorkbook();
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
-  const ws = wb.getWorksheet("Departments");
-  if (!ws) return [];
+export function parseDepartmentsWorksheet(ws: ExcelJS.Worksheet): Department[] {
   const { headers, rows } = readTable(ws);
   return rows
     .map((row) => rowToObject(headers, row))
     .filter((o) => o.Department_ID)
     .map((o) => ({
-      departmentId: String(o.Department_ID),
-      departmentName: String(o.Department_Name ?? ""),
+      departmentId: String(o.Department_ID).trim(),
+      departmentName: String(o.Department_Name ?? "").trim(),
       description: toStr(o.Department_Description),
       manager: toStr(o.Department_Manager),
-      status: (toStr(o.Department_Status) as "Active" | "Inactive" | null) ?? null,
+      status: (toStr(o.Department_Status)?.trim() as "Active" | "Inactive" | null) ?? null,
       createdAt: toStr(o.Created_At),
       updatedAt: toStr(o.Updated_At),
     }));
 }
 
-export async function getTasks(): Promise<Task[]> {
-  const { buffer } = await downloadWorkbook();
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
-  const ws = wb.getWorksheet("Tasks");
-  if (!ws) return [];
+export function parseTasksWorksheet(ws: ExcelJS.Worksheet): Task[] {
   const { headers, rows } = readTable(ws);
   return rows
     .map((row) => rowToObject(headers, row))
     .filter((o) => o.Task_ID)
     .map((o) => ({
-      taskId: String(o.Task_ID),
-      title: String(o.Task_Title ?? ""),
+      taskId: String(o.Task_ID).trim(),
+      title: String(o.Task_Title ?? "").trim(),
       description: toStr(o.Task_Description),
-      assignedTo: toStr(o.Assigned_To),
-      assignedBy: toStr(o.Assigned_By),
-      departmentId: toStr(o.Department_ID),
-      priority: (toStr(o.Priority) as TaskPriority | null) ?? null,
-      status: (toStr(o.Task_Status) as TaskStatus | null) ?? null,
+      assignedTo: toStr(o.Assigned_To)?.trim() ?? null,
+      assignedBy: toStr(o.Assigned_By)?.trim() ?? null,
+      departmentId: toStr(o.Department_ID)?.trim() ?? null,
+      priority: (toStr(o.Priority)?.trim() as TaskPriority | null) ?? null,
+      status: (toStr(o.Task_Status)?.trim() as TaskStatus | null) ?? null,
       assignedDate: toStr(o.Assigned_Date),
       dueDate: toStr(o.Due_Date),
       completionDate: toStr(o.Completion_Date),
@@ -167,10 +157,28 @@ export async function getTasks(): Promise<Task[]> {
     }));
 }
 
+export async function getDepartments(): Promise<Department[]> {
+  const { buffer } = await downloadWorkbook();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
+  const ws = wb.getWorksheet("Departments");
+  if (!ws) return [];
+  return parseDepartmentsWorksheet(ws);
+}
+
+export async function getTasks(): Promise<Task[]> {
+  const { buffer } = await downloadWorkbook();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
+  const ws = wb.getWorksheet("Tasks");
+  if (!ws) return [];
+  return parseTasksWorksheet(ws);
+}
+
 export async function getPerformance(): Promise<PerformanceRow[]> {
   const { buffer } = await downloadWorkbook();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const ws = wb.getWorksheet("Performance");
   if (!ws) return [];
   const { headers, rows } = readTable(ws);
@@ -198,7 +206,7 @@ export async function getPerformance(): Promise<PerformanceRow[]> {
 export async function getActivityLogs(): Promise<ActivityLog[]> {
   const { buffer } = await downloadWorkbook();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const ws = wb.getWorksheet("Activity_Logs");
   if (!ws) return [];
   const { headers, rows } = readTable(ws);
@@ -284,7 +292,7 @@ function readPermissionRecordsFromWorkbook(wb: ExcelJS.Workbook): PermissionReco
 export async function getPermissionRecords(employeeId?: string): Promise<PermissionRecord[]> {
   const { buffer } = await downloadWorkbook();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const records = readPermissionRecordsFromWorkbook(wb);
   return employeeId ? records.filter((record) => record.employeeId === employeeId) : records;
 }
@@ -370,7 +378,7 @@ function buildPermissionOverview(
 export async function getPermissionEmployeeOverview(search?: string): Promise<EmployeePermissionOverview[]> {
   const { buffer } = await downloadWorkbook();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const employeesWs = wb.getWorksheet("Employees");
   const employees = employeesWs ? parseEmployeesWorksheet(employeesWs) : [];
   const records = readPermissionRecordsFromWorkbook(wb);
@@ -390,7 +398,7 @@ export type EmployeePermissionDetails = {
 export async function getEmployeePermissionDetails(employeeId: string): Promise<EmployeePermissionDetails | null> {
   const { buffer } = await downloadWorkbook();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as any);
+  await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const employeesWs = wb.getWorksheet("Employees");
   const employee = employeesWs
     ? parseEmployeesWorksheet(employeesWs).find((row) => row.employeeId === employeeId)
@@ -456,6 +464,24 @@ function readWorksheetRows(ws: ExcelJS.Worksheet, headers: string[]): unknown[][
   return rows;
 }
 
+type WorksheetTableStyle = {
+  name?: string;
+  showFirstColumn?: string | number | boolean;
+  showLastColumn?: string | number | boolean;
+  showRowStripes?: string | number | boolean;
+  showColumnStripes?: string | number | boolean;
+};
+
+type WorksheetWithTables = ExcelJS.Worksheet & {
+  tables?: Record<string, { table?: { style?: WorksheetTableStyle } }>;
+  removeTable: (tableName: string) => void;
+  addTable: (config: Record<string, unknown>) => { commit: () => void };
+};
+
+function tableWorksheet(ws: ExcelJS.Worksheet): WorksheetWithTables {
+  return ws as unknown as WorksheetWithTables;
+}
+
 function ensurePermissionWorksheet(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
   let ws = wb.getWorksheet(PERMISSION_SHEET);
   if (!ws) {
@@ -469,9 +495,10 @@ function ensurePermissionWorksheet(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
     throw new Error(`Permission_Management sheet is missing required columns: ${missing.join(", ")}`);
   }
 
-  const table = (ws as any).tables?.[PERMISSION_TABLE];
+  const wsWithTables = tableWorksheet(ws);
+  const table = wsWithTables.tables?.[PERMISSION_TABLE];
   if (!table) {
-    (ws as any).addTable({
+    wsWithTables.addTable({
       name: PERMISSION_TABLE,
       ref: "A1",
       headerRow: true,
@@ -518,7 +545,7 @@ export async function saveEmployeePermissionGrants(
   return withWorkbookLock(async () => {
     const { buffer, version } = await downloadWorkbook();
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(buffer as any);
+    await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
 
     const employeesWs = wb.getWorksheet("Employees");
     const employee = employeesWs
@@ -702,20 +729,21 @@ function nextId(existing: string[], prefix: string): string {
 }
 
 function rebuildTable(ws: ExcelJS.Worksheet, tableName: string, headers: string[], rows: unknown[][]): void {
-  const old = (ws as any).tables?.[tableName];
+  const wsWithTables = tableWorksheet(ws);
+  const old = wsWithTables.tables?.[tableName];
   const style = old?.table?.style;
-  (ws as any).removeTable(tableName);
-  const table = (ws as any).addTable({
+  wsWithTables.removeTable(tableName);
+  const table = wsWithTables.addTable({
     name: tableName,
     ref: "A1",
     headerRow: true,
     totalsRow: false,
     style: {
-      theme: ((style?.name as string) || "TableStyleMedium2") as any,
-      showFirstColumn: style?.showFirstColumn === "1" || style?.showFirstColumn === true,
-      showLastColumn: style?.showLastColumn === "1" || style?.showLastColumn === true,
-      showRowStripes: style?.showRowStripes !== "0" && style?.showRowStripes !== false,
-      showColumnStripes: style?.showColumnStripes === "1" || style?.showColumnStripes === true,
+      theme: style?.name || "TableStyleMedium2",
+      showFirstColumn: style?.showFirstColumn === "1" || style?.showFirstColumn === 1 || style?.showFirstColumn === true,
+      showLastColumn: style?.showLastColumn === "1" || style?.showLastColumn === 1 || style?.showLastColumn === true,
+      showRowStripes: style?.showRowStripes !== "0" && style?.showRowStripes !== 0 && style?.showRowStripes !== false,
+      showColumnStripes: style?.showColumnStripes === "1" || style?.showColumnStripes === 1 || style?.showColumnStripes === true,
     },
     columns: headers.map((h) => ({ name: h })),
     rows,
@@ -745,7 +773,7 @@ export async function createTask(
   return withWorkbookLock(async () => {
     const { buffer, version } = await downloadWorkbook();
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(buffer as any);
+    await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
 
     const ws = wb.getWorksheet("Tasks");
     if (!ws) throw new Error("Tasks sheet not found");
@@ -888,13 +916,14 @@ export async function updateTask(
   input: unknown,
   actorInput: string | TaskActor | null = null
 ): Promise<Task> {
-  void actorInput; // Reserved for task-update audit logging.
   const parsed = updateTaskSchema.parse(input);
+  const actor = normalizeTaskActor(actorInput);
+  const actorRole = actor.role === "admin" ? "Admin" : "Employee";
   const taskId = parsed.taskId;
   return withWorkbookLock(async () => {
     const { buffer, version } = await downloadWorkbook();
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(buffer as any);
+    await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
 
     const ws = wb.getWorksheet("Tasks");
     if (!ws) throw new Error("Tasks sheet not found");
@@ -921,25 +950,53 @@ export async function updateTask(
     if (!targetRow) throw new NotFoundError(`Task ${taskId} not found`);
 
     const now = nowIso();
-    const setCell = (name: string, value: unknown) => {
-      const idx = colIndex(name);
-      if (idx > 0) targetRow!.getCell(idx).value = value as ExcelJS.CellValue;
+    const changes: Record<string, { previous: unknown; next: unknown }> = {};
+    const normalizeForCompare = (value: unknown): string => String(value ?? "").trim();
+    const trackCell = (column: string, value: unknown) => {
+      const idx = colIndex(column);
+      if (idx <= 0) return;
+      const previous = cellValue(targetRow!.getCell(idx));
+      if (normalizeForCompare(previous) !== normalizeForCompare(value)) {
+        changes[column] = { previous, next: value };
+      }
+      targetRow!.getCell(idx).value = value as ExcelJS.CellValue;
     };
 
-    if (parsed.title !== undefined) setCell("Task_Title", parsed.title);
-    if (parsed.description !== undefined) setCell("Task_Description", parsed.description);
-    if (parsed.assignedTo !== undefined) setCell("Assigned_To", parsed.assignedTo);
-    if (parsed.assignedBy !== undefined) setCell("Assigned_By", parsed.assignedBy);
-    if (parsed.departmentId !== undefined) setCell("Department_ID", parsed.departmentId);
-    if (parsed.priority !== undefined) setCell("Priority", parsed.priority);
-    if (parsed.status !== undefined) setCell("Task_Status", parsed.status);
-    if (parsed.assignedDate !== undefined) setCell("Assigned_Date", parsed.assignedDate);
-    if (parsed.dueDate !== undefined) setCell("Due_Date", parsed.dueDate);
-    if (parsed.progressPercentage !== undefined) setCell("Progress_Percentage", parsed.progressPercentage);
-    if (parsed.remarks !== undefined) setCell("Task_Remarks", parsed.remarks);
-    setCell("Updated_At", now);
+    if (parsed.title !== undefined) trackCell("Task_Title", parsed.title);
+    if (parsed.description !== undefined) trackCell("Task_Description", parsed.description);
+    if (parsed.assignedTo !== undefined) trackCell("Assigned_To", parsed.assignedTo);
+    if (parsed.assignedBy !== undefined) trackCell("Assigned_By", parsed.assignedBy);
+    if (parsed.departmentId !== undefined) trackCell("Department_ID", parsed.departmentId);
+    if (parsed.priority !== undefined) trackCell("Priority", parsed.priority);
+    if (parsed.status !== undefined) trackCell("Task_Status", parsed.status);
+    if (parsed.assignedDate !== undefined) trackCell("Assigned_Date", parsed.assignedDate);
+    if (parsed.dueDate !== undefined) trackCell("Due_Date", parsed.dueDate);
+    if (parsed.progressPercentage !== undefined) trackCell("Progress_Percentage", parsed.progressPercentage);
+    if (parsed.remarks !== undefined) trackCell("Task_Remarks", parsed.remarks);
+
+    const updatedIdx = colIndex("Updated_At");
+    if (updatedIdx > 0) targetRow!.getCell(updatedIdx).value = now;
     if (parsed.status === "Completed") {
-      setCell("Completion_Date", now.slice(0, 10));
+      trackCell("Completion_Date", now.slice(0, 10));
+    }
+
+    if (Object.keys(changes).length) {
+      try {
+        const changedFields = Object.keys(changes);
+        const isCompletion = parsed.status === "Completed" && normalizeForCompare(changes.Task_Status?.next) === "completed";
+        appendActivityLogs(wb, [{
+          actorEmail: actor.email,
+          actorRole,
+          actionType: isCompletion ? "TASK_COMPLETED" : "TASK_UPDATED",
+          targetEntity: "Task",
+          targetId: taskId,
+          description: `${actorRole} ${isCompletion ? "completed" : "updated"} task ${taskId}${changedFields.length ? ` (${changedFields.join(", ")})` : ""}`,
+          previousValue: JSON.stringify(Object.fromEntries(changedFields.map((field) => [field, changes[field].previous]))),
+          newValue: JSON.stringify(Object.fromEntries(changedFields.map((field) => [field, changes[field].next]))),
+        }]);
+      } catch (logError) {
+        console.error("Unable to write task activity log", logError);
+      }
     }
 
     const outBuffer = await wb.xlsx.writeBuffer();

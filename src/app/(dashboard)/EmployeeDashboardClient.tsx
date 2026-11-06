@@ -30,7 +30,7 @@ type DashboardResponse = {
   summary: DashboardSummary | null;
 };
 
-export default function DashboardClient({ user }: { user: SafeUser }) {
+export default function EmployeeDashboardClient({ user }: { user: SafeUser }) {
   const canViewDashboard = Boolean(user.permissions.DASHBOARD_VIEW_PERSONAL);
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(canViewDashboard);

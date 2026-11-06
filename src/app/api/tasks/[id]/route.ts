@@ -55,6 +55,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     if (user.role === "admin") {
       for (const key of requestedKeys) patch[key] = body[key];
+      if (Object.keys(patch).length === 0) {
+        return NextResponse.json({ error: "No editable fields were provided" }, { status: 400 });
+      }
       if (patch.assignedTo !== undefined && patch.assignedTo !== null) {
         const employees = await getEmployees();
         if (!employees.some((employee) => employee.employeeId === patch.assignedTo)) {

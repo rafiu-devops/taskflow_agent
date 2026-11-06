@@ -9,6 +9,11 @@ export interface SessionData {
   employeeId?: string;
 }
 
+export interface Session extends SessionData {
+  save(): Promise<void>;
+  destroy(): Promise<void>;
+}
+
 const COOKIE_NAME = "taskflow_session";
 
 function secret(): Buffer {
@@ -40,7 +45,7 @@ function decrypt(value: string): SessionData {
   }
 }
 
-function toData(session: any): SessionData {
+function toData(session: SessionData): SessionData {
   return {
     email: session.email,
     name: session.name,
@@ -49,19 +54,19 @@ function toData(session: any): SessionData {
   };
 }
 
-export async function getSession() {
+export async function getSession(): Promise<Session> {
   const cookieStore = await cookies();
   const cookie = cookieStore.get(COOKIE_NAME);
   const data = cookie?.value ? decrypt(cookie.value) : {};
 
-  const session: any = {
+  const session: Session = {
     email: data.email,
     name: data.name,
     role: data.role,
     employeeId: data.employeeId,
     async save() {
       const cs = await cookies();
-      cs.set(COOKIE_NAME, encrypt(toData(this)), {
+      cs.set(COOKIE_NAME, encrypt(toData(session)), {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",

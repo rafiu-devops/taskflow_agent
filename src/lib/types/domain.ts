@@ -89,6 +89,88 @@ export interface PermissionRecord {
   updatedAt: string | null;
 }
 
+export interface AdminDashboardFilters {
+  from: string | null;
+  to: string | null;
+  departmentId: string | null;
+  employeeId: string | null;
+  status: "Pending" | "In Progress" | "Completed" | "Overdue" | null;
+}
+
+export interface AdminKpis {
+  totalEmployees: number;
+  activeEmployees: number;
+  totalDepartments: number;
+  totalTasks: number;
+  completedTasks: number;
+  pendingTasks: number;
+  inProgressTasks: number;
+  overdueTasks: number;
+  overallCompletionRate: number;
+  onTimeCompletionRate: number;
+}
+
+export interface StatusDistributionItem {
+  name: "Pending" | "In Progress" | "Completed" | "Overdue";
+  value: number;
+}
+
+export interface DepartmentDistributionItem {
+  departmentId: string;
+  departmentName: string;
+  tasks: number;
+  completed: number;
+}
+
+export interface CompletionTrendPoint {
+  label: string;
+  completed: number;
+}
+
+export interface AdminDashboardTask {
+  taskId: string;
+  title: string;
+  assignedTo: string | null;
+  employeeName: string;
+  departmentId: string | null;
+  departmentName: string;
+  priority: TaskPriority | null;
+  status: TaskStatus | null;
+  dueDate: string | null;
+  assignedDate: string | null;
+  completionDate: string | null;
+  progressPercentage: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  daysOverdue: number | null;
+}
+
+export interface EmployeePerformanceOverview {
+  employeeId: string;
+  employeeName: string;
+  departmentId: string | null;
+  departmentName: string;
+  assignedTasks: number;
+  completedTasks: number;
+  pendingTasks: number;
+  overdueTasks: number;
+  completionRate: number;
+}
+
+export interface AdminDashboardData {
+  filters: AdminDashboardFilters;
+  kpis: AdminKpis;
+  statusDistribution: StatusDistributionItem[];
+  departmentDistribution: DepartmentDistributionItem[];
+  completionTrend: CompletionTrendPoint[];
+  recentTasks: AdminDashboardTask[];
+  overdueTasks: AdminDashboardTask[];
+  employeePerformance: EmployeePerformanceOverview[];
+  employees: Array<Pick<Employee, "employeeId" | "fullName" | "departmentId" | "accountStatus">>;
+  departments: Array<Pick<Department, "departmentId" | "departmentName" | "status">>;
+  generatedAt: string;
+}
+
 export interface DashboardSummary {
   totalEmployees: number;
   totalDepartments: number;

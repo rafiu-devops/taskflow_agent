@@ -1,10 +1,16 @@
-import DashboardClient from "./DashboardClient";
+import AdminDashboardClient from "./AdminDashboardClient";
+import EmployeeDashboardClient from "./EmployeeDashboardClient";
 import { requirePageUser } from "@/lib/auth/pageGuards";
 
 export default async function DashboardPage() {
   const user = await requirePageUser();
+
+  if (user.role === "admin") {
+    return <AdminDashboardClient user={{ name: user.name, email: user.email }} />;
+  }
+
   return (
-    <DashboardClient
+    <EmployeeDashboardClient
       user={{
         email: user.email,
         name: user.name,
