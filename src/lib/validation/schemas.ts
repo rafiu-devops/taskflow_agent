@@ -35,6 +35,17 @@ export const createEmployeeSchema = z.object({
   joiningDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional().nullable(),
 });
 
+export const createDepartmentSchema = z.object({
+  departmentName: z.string().trim().min(1, "Department name is required").max(100, "Department name must be 100 characters or fewer"),
+  description: z.string().max(1000).optional().nullable(),
+  manager: z.string().trim().max(100).optional().nullable(),
+  status: z.enum(["Active", "Inactive"]).optional().nullable(),
+});
+
+export const updateDepartmentSchema = createDepartmentSchema.partial().extend({
+  departmentId: departmentIdSchema,
+});
+
 export const loginSchema = z.object({
   code: z.string().min(1),
   state: z.string().optional(),

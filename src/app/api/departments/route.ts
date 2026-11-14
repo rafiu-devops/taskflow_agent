@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { requirePermission, hasPermission } from "@/lib/auth/authorization";
-import { getDepartments } from "@/lib/excel/excelService";
+import { requireAdmin, requirePermission, hasPermission } from "@/lib/auth/authorization";
+import { getDepartments, createDepartment } from "@/lib/excel/excelService";
 import { handleApiError } from "@/lib/api/handleError";
+import { createDepartmentSchema } from "@/lib/validation/schemas";
 
 export async function GET() {
   try {
@@ -21,5 +22,17 @@ export async function GET() {
     return NextResponse.json({ departments: scoped });
   } catch (err) {
     return handleApiError(err, "Failed to load departments");
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const user = await requireAdmin();
+    const body = await request.json().catch(() => ({}));
+    const parsed = createDepartmentSchema.parse(body);
+    const department = await createDepartment(parsed, { email: user.email, role: "admin" });
+    return NextResponse.json({ department }, { status: 201 });
+  } catch (err) {
+    return handleApiError(err, "Failed to create department");
   }
 }

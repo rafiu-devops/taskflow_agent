@@ -13,7 +13,7 @@ import type {
   DashboardSummary,
   PermissionRecord,
 } from "@/lib/types/domain";
-import { createTaskSchema, updateTaskSchema, createEmployeeSchema } from "@/lib/validation/schemas";
+import { createTaskSchema, updateTaskSchema, createEmployeeSchema, createDepartmentSchema, updateDepartmentSchema } from "@/lib/validation/schemas";
 
 function cellValue(cell: ExcelJS.Cell): unknown {
   const v = cell.value;
@@ -1105,6 +1105,197 @@ export async function createEmployee(input: unknown, actorInput: string | TaskAc
       createdAt: now,
       updatedAt: now,
     };
+  });
+}
+
+export async function createDepartment(input: unknown, actorInput: string | TaskActor | null = null): Promise<Department> {
+  const parsed = createDepartmentSchema.parse(input);
+  const actor = normalizeTaskActor(actorInput);
+  const actorId = actor.email;
+  const actorRole = actor.role === "admin" ? "Admin" : "Employee";
+  return withWorkbookLock(async () => {
+    const { buffer, version } = await downloadWorkbook();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    const ws = wb.getWorksheet("Departments");
+    if (!ws) throw new NotFoundError("Departments sheet not found");
+
+    const departments = parseDepartmentsWorksheet(ws);
+    const duplicate = departments.find(
+      (department) => department.departmentName.trim().toLowerCase() === parsed.departmentName.trim().toLowerCase(),
+    );
+    if (duplicate) throw new ConflictError("A department with this name already exists.");
+
+    const departmentId = nextId(departments.map((department) => department.departmentId), "DEPT");
+    const headerRow = ws.getRow(1);
+    const headers: string[] = [];
+    for (let c = 1; c <= headerRow.cellCount; c++) {
+      const v = headerRow.getCell(c).value;
+      headers.push(v === null || v === undefined ? "" : String(v));
+    }
+    while (headers.length && headers[headers.length - 1] === "") headers.pop();
+    const colIndex = (name: string) => headers.indexOf(name) + 1;
+
+    const existingRows: unknown[][] = [];
+    const existingIds: string[] = [];
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const vals: unknown[] = [];
+      let any = false;
+      for (let c = 1; c <= headers.length; c++) {
+        const v = cellValue(row.getCell(c));
+        vals.push(v);
+        if (v !== null && v !== undefined && v !== "") any = true;
+      }
+      if (any) {
+        existingRows.push(vals);
+        const id = vals[colIndex("Department_ID") - 1];
+        if (id) existingIds.push(String(id));
+      }
+    }
+
+    const now = nowIso();
+    const newRow: unknown[] = new Array(headers.length).fill(null);
+    const set = (name: string, value: unknown) => {
+      const idx = colIndex(name) - 1;
+      if (idx >= 0) newRow[idx] = value;
+    };
+    set("Department_ID", departmentId);
+    set("Department_Name", parsed.departmentName);
+    set("Department_Description", parsed.description ?? null);
+    set("Department_Manager", parsed.manager ?? null);
+    set("Department_Status", parsed.status ?? "Active");
+    set("Created_At", now);
+    set("Updated_At", now);
+
+    existingRows.push(newRow);
+    rebuildTable(ws, "tblDepartments", headers, existingRows);
+
+    try {
+      await appendActivityLogs(wb, [{
+        actorEmail: actorId,
+        actorRole,
+        actionType: "DEPARTMENT_CREATED",
+        targetEntity: "Department",
+        targetId: departmentId,
+        description: `Created department ${departmentId}`,
+        previousValue: null,
+        newValue: parsed.departmentName,
+      }]);
+    } catch (logError) {
+      console.error("Unable to write department activity log", logError);
+    }
+
+    const outBuffer = await wb.xlsx.writeBuffer();
+    await uploadWorkbook(Buffer.from(outBuffer), version);
+
+    return {
+      departmentId,
+      departmentName: parsed.departmentName,
+      description: parsed.description ?? null,
+      manager: parsed.manager ?? null,
+      status: parsed.status ?? "Active",
+      createdAt: now,
+      updatedAt: now,
+    };
+  });
+}
+
+export async function updateDepartment(input: unknown, actorInput: string | TaskActor | null = null): Promise<Department> {
+  const parsed = updateDepartmentSchema.parse(input);
+  const actor = normalizeTaskActor(actorInput);
+  const actorId = actor.email;
+  const actorRole = actor.role === "admin" ? "Admin" : "Employee";
+  const departmentId = parsed.departmentId;
+  const patch: Record<string, unknown> = {};
+  if (parsed.departmentName !== undefined) patch.departmentName = parsed.departmentName;
+  if (parsed.description !== undefined) patch.description = parsed.description;
+  if (parsed.manager !== undefined) patch.manager = parsed.manager;
+  if (parsed.status !== undefined) patch.status = parsed.status;
+  return withWorkbookLock(async () => {
+    const { buffer, version } = await downloadWorkbook();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    const ws = wb.getWorksheet("Departments");
+    if (!ws) throw new NotFoundError("Departments sheet not found");
+
+    const headerRow = ws.getRow(1);
+    const headers: string[] = [];
+    for (let c = 1; c <= headerRow.cellCount; c++) {
+      const v = headerRow.getCell(c).value;
+      headers.push(v === null || v === undefined ? "" : String(v));
+    }
+    while (headers.length && headers[headers.length - 1] === "") headers.pop();
+    const colIndex = (name: string) => headers.indexOf(name) + 1;
+
+    let targetRow: ExcelJS.Row | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const id = cellValue(row.getCell(colIndex("Department_ID")));
+      if (id && String(id) === departmentId) {
+        targetRow = row;
+        break;
+      }
+    }
+    if (!targetRow) throw new NotFoundError(`Department ${departmentId} not found`);
+
+    const departments = parseDepartmentsWorksheet(ws);
+    const nextDepartmentName = typeof patch.departmentName === "string" ? patch.departmentName.trim() : null;
+    if (
+      nextDepartmentName &&
+      departments.some(
+        (department) =>
+          department.departmentId !== departmentId &&
+          department.departmentName.trim().toLowerCase() === nextDepartmentName.toLowerCase(),
+      )
+    ) {
+      throw new ConflictError("A department with this name already exists.");
+    }
+
+    const now = nowIso();
+    const changes: Record<string, { previous: unknown; next: unknown }> = {};
+    const normalizeForCompare = (value: unknown): string => String(value ?? "").trim();
+    const trackCell = (column: string, value: unknown) => {
+      const idx = colIndex(column);
+      if (idx <= 0) return;
+      const previous = cellValue(targetRow!.getCell(idx));
+      if (normalizeForCompare(previous) !== normalizeForCompare(value)) {
+        changes[column] = { previous, next: value };
+      }
+      targetRow!.getCell(idx).value = value as ExcelJS.CellValue;
+    };
+
+    if (patch.departmentName !== undefined) trackCell("Department_Name", patch.departmentName);
+    if (patch.description !== undefined) trackCell("Department_Description", patch.description);
+    if (patch.manager !== undefined) trackCell("Department_Manager", patch.manager);
+    if (patch.status !== undefined) trackCell("Department_Status", patch.status);
+
+    const updatedIdx = colIndex("Updated_At");
+    if (updatedIdx > 0) targetRow!.getCell(updatedIdx).value = now;
+
+    if (Object.keys(changes).length) {
+      try {
+        await appendActivityLogs(wb, [{
+          actorEmail: actorId,
+          actorRole,
+          actionType: "DEPARTMENT_UPDATED",
+          targetEntity: "Department",
+          targetId: departmentId,
+          description: `Updated department ${departmentId}`,
+          previousValue: JSON.stringify(Object.fromEntries(Object.keys(changes).map((key) => [key, changes[key].previous]))),
+          newValue: JSON.stringify(Object.fromEntries(Object.keys(changes).map((key) => [key, changes[key].next]))),
+        }]);
+      } catch (logError) {
+        console.error("Unable to write department activity log", logError);
+      }
+    }
+
+    const outBuffer = await wb.xlsx.writeBuffer();
+    await uploadWorkbook(Buffer.from(outBuffer), version);
+
+    const updated = await getDepartments().then((items) => items.find((item) => item.departmentId === departmentId));
+    if (!updated) throw new NotFoundError(`Department ${departmentId} not found`);
+    return updated;
   });
 }
 
