@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { downloadWorkbook, uploadWorkbook } from "@/lib/google/driveClient";
 import { withWorkbookLock } from "@/lib/excel/mutex";
-import { NotFoundError } from "@/lib/errors";
+import { NotFoundError, ConflictError } from "@/lib/errors";
 import type {
   Employee,
   Department,
@@ -13,7 +13,7 @@ import type {
   DashboardSummary,
   PermissionRecord,
 } from "@/lib/types/domain";
-import { createTaskSchema, updateTaskSchema } from "@/lib/validation/schemas";
+import { createTaskSchema, updateTaskSchema, createEmployeeSchema } from "@/lib/validation/schemas";
 
 function cellValue(cell: ExcelJS.Cell): unknown {
   const v = cell.value;
@@ -1005,6 +1005,106 @@ export async function updateTask(
     // read back
     const updated = await getTasks().then((ts) => ts.find((t) => t.taskId === taskId)!);
     return updated;
+  });
+}
+
+export async function createEmployee(input: unknown, actorInput: string | TaskActor | null = null): Promise<Employee> {
+  const parsed = createEmployeeSchema.parse(input);
+  const actor = normalizeTaskActor(actorInput);
+  const actorId = actor.email;
+  const actorRole = actor.role === "admin" ? "Admin" : "Employee";
+  return withWorkbookLock(async () => {
+    const { buffer, version } = await downloadWorkbook();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    const ws = wb.getWorksheet("Employees");
+    if (!ws) throw new NotFoundError("Employees sheet not found");
+
+    const employees = parseEmployeesWorksheet(ws);
+    const duplicateEmail = employees.find((employee) => employee.email && employee.email.toLowerCase() === parsed.email.toLowerCase());
+    if (duplicateEmail) throw new ConflictError("An employee with this email already exists.");
+
+    const employeeId = parsed.employeeId ? parsed.employeeId.trim() : nextId(employees.map((employee) => employee.employeeId), "EMP");
+    if (employeeId) {
+      const duplicateId = employees.find((employee) => employee.employeeId.toLowerCase() === employeeId.toLowerCase());
+      if (duplicateId) throw new ConflictError("An employee with this employee ID already exists.");
+    }
+
+    const headerRow = ws.getRow(1);
+    const headers: string[] = [];
+    for (let c = 1; c <= headerRow.cellCount; c++) {
+      const v = headerRow.getCell(c).value;
+      headers.push(v === null || v === undefined ? "" : String(v));
+    }
+    while (headers.length && headers[headers.length - 1] === "") headers.pop();
+    const colIndex = (name: string) => headers.indexOf(name) + 1;
+
+    const existingRows: unknown[][] = [];
+    const existingIds: string[] = [];
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const vals: unknown[] = [];
+      let any = false;
+      for (let c = 1; c <= headers.length; c++) {
+        const v = cellValue(row.getCell(c));
+        vals.push(v);
+        if (v !== null && v !== undefined && v !== "") any = true;
+      }
+      if (any) {
+        existingRows.push(vals);
+        const id = vals[colIndex("Employee_ID") - 1];
+        if (id) existingIds.push(String(id));
+      }
+    }
+
+    const now = nowIso();
+    const newRow: unknown[] = new Array(headers.length).fill(null);
+    const set = (name: string, value: unknown) => {
+      const idx = colIndex(name) - 1;
+      if (idx >= 0) newRow[idx] = value;
+    };
+    set("Employee_ID", employeeId);
+    set("Full_Name", parsed.fullName);
+    set("Email", parsed.email);
+    set("Department_ID", parsed.departmentId ?? null);
+    set("Designation", parsed.designation ?? null);
+    set("Account_Status", parsed.accountStatus ?? "Active");
+    set("Joining_Date", parsed.joiningDate ?? now.slice(0, 10));
+    set("Created_At", now);
+    set("Updated_At", now);
+
+    existingRows.push(newRow);
+    rebuildTable(ws, "tblEmployees", headers, existingRows);
+
+    try {
+      await appendActivityLogs(wb, [{
+        actorEmail: actorId,
+        actorRole,
+        actionType: "EMPLOYEE_CREATED",
+        targetEntity: "Employee",
+        targetId: String(employeeId ?? ""),
+        description: `Created employee ${employeeId}`,
+        previousValue: null,
+        newValue: parsed.fullName,
+      }]);
+    } catch (logError) {
+      console.error("Unable to write employee activity log", logError);
+    }
+
+    const outBuffer = await wb.xlsx.writeBuffer();
+    await uploadWorkbook(Buffer.from(outBuffer), version);
+
+    return {
+      employeeId,
+      fullName: parsed.fullName,
+      email: parsed.email,
+      departmentId: parsed.departmentId ?? null,
+      designation: parsed.designation ?? null,
+      accountStatus: (parsed.accountStatus ?? "Active") as Employee["accountStatus"],
+      joiningDate: parsed.joiningDate ?? now.slice(0, 10),
+      createdAt: now,
+      updatedAt: now,
+    };
   });
 }
 

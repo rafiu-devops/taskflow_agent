@@ -25,6 +25,16 @@ export const updateTaskSchema = createTaskSchema.partial().extend({
   taskId: taskIdSchema,
 });
 
+export const createEmployeeSchema = z.object({
+  fullName: z.string().trim().min(1, "Employee full name is required").max(120),
+  email: z.string().trim().toLowerCase().email("Enter a valid work email").max(254),
+  employeeId: employeeIdSchema.optional(),
+  departmentId: departmentIdSchema.optional().nullable(),
+  designation: z.string().trim().max(120).optional().nullable(),
+  accountStatus: z.enum(["Active", "Inactive"]).optional().nullable(),
+  joiningDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional().nullable(),
+});
+
 export const loginSchema = z.object({
   code: z.string().min(1),
   state: z.string().optional(),
