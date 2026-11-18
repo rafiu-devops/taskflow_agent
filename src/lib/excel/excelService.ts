@@ -719,6 +719,14 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function todayInTimeZone(timeZone = "Asia/Karachi"): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
 function nextId(existing: string[], prefix: string): string {
   let max = 0;
   for (const id of existing) {
@@ -1073,7 +1081,7 @@ export async function createEmployee(input: unknown, actorInput: string | TaskAc
     set("Department_ID", parsed.departmentId ?? null);
     set("Designation", parsed.designation ?? null);
     set("Account_Status", parsed.accountStatus ?? "Active");
-    set("Joining_Date", parsed.joiningDate ?? now.slice(0, 10));
+    set("Joining_Date", parsed.joiningDate ?? todayInTimeZone());
     set("Created_At", now);
     set("Updated_At", now);
 
@@ -1105,7 +1113,7 @@ export async function createEmployee(input: unknown, actorInput: string | TaskAc
       departmentId: parsed.departmentId ?? null,
       designation: parsed.designation ?? null,
       accountStatus: (parsed.accountStatus ?? "Active") as Employee["accountStatus"],
-      joiningDate: parsed.joiningDate ?? now.slice(0, 10),
+      joiningDate: parsed.joiningDate ?? todayInTimeZone(),
       createdAt: now,
       updatedAt: now,
     };
@@ -1130,7 +1138,21 @@ export async function createDepartment(input: unknown, actorInput: string | Task
     );
     if (duplicate) throw new ConflictError("A department with this name already exists.");
 
-    const departmentId = nextId(departments.map((department) => department.departmentId), "DEPT");
+    const departmentCode = parsed.departmentName
+      .trim()
+      .split(/\s+/)[0]
+      .replace(/[^A-Za-z0-9]/g, "")
+      .toUpperCase()
+      .slice(0, 6) || "DEPT";
+    const departmentId = `DEPT-${departmentCode}-${String(
+      departments
+        .map((department) => department.departmentId)
+        .reduce((max, id) => {
+          const match = String(id).match(new RegExp(`^DEPT-${departmentCode}-(\\d+)$`));
+          const value = match ? parseInt(match[1], 10) : 0;
+          return value > max ? value : max;
+        }, 0) + 1,
+    ).padStart(3, "0")}`;
     const headerRow = ws.getRow(1);
     const headers: string[] = [];
     for (let c = 1; c <= headerRow.cellCount; c++) {
