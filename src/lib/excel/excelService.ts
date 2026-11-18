@@ -318,6 +318,7 @@ export type EmployeePermissionOverview = Employee & {
   totalPermissions: number;
   permissionStatus: "Not configured" | "Partial access" | "Full employee access";
   lastPermissionUpdate: string | null;
+  permissions: PermissionGrantState;
 };
 
 function buildPermissionOverview(
@@ -349,6 +350,8 @@ function buildPermissionOverview(
           latestByKey.set(record.permissionKey, record);
         }
       }
+      const grants = emptyEmployeePermissions();
+      for (const [key, record] of latestByKey) grants[key] = record.granted;
       const effective = Array.from(latestByKey.values());
       const grantedPermissions = effective.filter((record) => record.granted).length;
       const totalPermissions = PERMISSION_KEYS.length;
@@ -370,6 +373,7 @@ function buildPermissionOverview(
         totalPermissions,
         permissionStatus,
         lastPermissionUpdate,
+        permissions: grants,
       };
     })
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
